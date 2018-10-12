@@ -5,6 +5,7 @@ var expressSession = require('express-session');
 var passport = require('passport');
 var serializer = require('serializer');
 var request = require('request');
+var email = require('../email.js');
 
 function createSecret(secretBase) {
   var encryptKey = serializer.randomString(48);
@@ -232,12 +233,40 @@ module.exports = function(app, config) {
     }
   );
 
-  router.post('/auth/login', function(req, res) {
+  function userPasswordAuth(req, res) {
+
     var requestOptions = {
       method: 'POST',
       form: req.body
     };
     getSession(req, res, requestOptions, true);
+  }
+
+  router.post('/auth/login', function (req, res) {
+
+    if (req.body.reset_token && req.body.reset_token.length > 0) {
+      findUser(req.body.name, function (err, user) {
+
+        if (!err && req.body.reset_token === user.reset_token) {
+          // reset password for user
+          user.reset_token = null;
+          user.password = req.body.password;
+
+          users.insert(user, user._id, function (err, response) {
+            if (err || !response.ok) {
+              return res.json({ error: true, errorResult: 'You are not authorized' });
+            }
+
+            return userPasswordAuth(req, res);
+          });
+        } else {
+          return userPasswordAuth(req, res);
+        }
+      });
+
+    } else {
+      return userPasswordAuth(req, res);
+    }
   });
 
   router.post('/chkuser', function(req, res) {
@@ -257,5 +286,29 @@ module.exports = function(app, config) {
     req.logout();
     res.redirect('/');
   });
+
+  router.post('/auth/forgot', function (req, res) {
+
+    findUser(req.body.name, function (err, user) {
+      if (!err) {
+        user.reset_token = serializer.randomString(96);
+
+        // save reset token
+        users.insert(user, user._id, function (err, response) {
+          if (err || !response.ok) {
+            return res.json({ error: true, message: 'Password reset e-mail not sent' });
+          }
+
+          var reset_url = config.serverURL + '/#/password_reset/' + user.name;
+          reset_url += '/' + user.reset_token;
+
+          sendEmail('password_reset', user.email, { reset_url: reset_url });
+        });
+      }
+
+      return res.json({ message: 'Password reset e-mail sent.' });
+    });
+  });
+
   app.use('/', router);
 };
